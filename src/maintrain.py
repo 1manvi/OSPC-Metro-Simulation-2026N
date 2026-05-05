@@ -132,60 +132,89 @@ class Passenger(threading.Thread):
         self.strategy.move()
         platform = random.randint(1, 4)
         print(f"{name} reached Platform {platform} and boarded the train")
+########
+#ticket machine thread
 
-
-
-
-class Train(threading.Thread):
-    def __init__(self, train_id, event_center, station):
-        super().__init__()
-        self.train_id = train_id
+class TicketMachine(threading.Thread):
+    def __init__(self, machine_id, event_center, cycles=3):
+        super().__init__(daemon=True)
+        self.machine_id = machine_id
         self.event_center = event_center
-        self.station = station
-        self.capacity = 50
-        self.current_passengers = []
-        self.is_delayed = False
+        self.cycles = cycles
 
     def run(self):
-        while True:
-            travel_time = random.randint(3, 7)
-            if self.is_delayed:
-                travel_time += 10
-            time.sleep(travel_time)
+        for i in range(self.cycles):
+            time.sleep(random.uniform(0.5, 1.0))
+            if random.random() < 0.15:
+                print(f"Ticket Machine {self.machine_id} OUT OF SERVICE!")
+                self.event_center.notify("EMERGENCY", {
+                    "location": f"Ticket Machine {self.machine_id}"
+                })
+                time.sleep(1.5)
+            else:
+                print(f"Ticket Machine {self.machine_id} dispensed a card (cycle {i+1})")
 
-            print(f"Train {self.train_id} requesting platform at {self.station.name}...")
+############
+#random event threads
 
-            with self.station.platform_lock:
-                self.event_center.notify("TRAIN_ARRIVAL", {"id": self.train_id, "station": self.station.name})
-                print(f"Train {self.train_id} is boarding at {self.station.name}.")
-                time.sleep(3)
 
-                self.event_center.notify("TRAIN_DEPARTURE", {"id": self.train_id})
-            if random.random() < 0.1:
-                self.trigger_random_delay()
+class RandomEventSystem(threading.Thread):
+    EVENTS = [
+        {"type": "EMERGENCY", "location": "Entrance B — suspicious package"},
+        {"type": "EMERGENCY", "location": "Platform 2 — medical emergency"},
+        {"type": "EMERGENCY", "location": "South entrance — flooding"},
+    ]
 
-    def trigger_random_delay(self):
-        self.is_delayed = True
-        self.event_center.notify("TRAIN_DELAY", {"id": self.train_id, "minutes": 15})
-        time.sleep(5)
-        self.is_delayed = False
+    def __init__(self, event_center, num_events=2):
+        super().__init__(daemon=True)
+        self.event_center = event_center
+        self.num_events = num_events
+
+    def run(self):
+        chosen = random.sample(self.EVENTS, min(self.num_events, len(self.EVENTS)))
+        for event in chosen:
+            time.sleep(random.uniform(3.0, 6.0))
+            print(f"\nRANDOM EVENT at {event['location']}")
+            self.event_center.notify(event["type"], {"location": event["location"]})
+            print()
+
+#############
+# MAIN
 
 
 if __name__ == "__main__":
     center = StationEventCenter()
-    pa_system = AnnouncementSystem()
-    security = SecurityOffice()
-    center.subscribe(pa_system)
-    center.subscribe(security)
-    class MetroStation:
-        def __init__(self, name):
-            self.name = name
-            self.platform_lock = threading.Lock()
+
+    # Register all observers
+    center.subscribe(AnnouncementSystem())
+    center.subscribe(SecurityOffice())
+    center.subscribe(OperatorPanel())
 
     sol_station = MetroStation("Sol")
-    train0 = Train("Line-10-A", center, sol_station)
-    train1 = Train("Line-10-B", center, sol_station)
+    strategies = [NormalMovement(), RushHourMovement(), EmergencyEvacuation()]
 
-    print("Metro simulation starting")
-    train0.start()
-    train1.start()
+    threads = []
+    threads.append(Train("Line-10-A", center, sol_station))
+    threads.append(Train("Line-10-B", center, sol_station))
+    threads.append(TicketMachine(1, center))
+    threads.append(TicketMachine(2, center))
+    for i in range(1, 7):
+        threads.append(Passenger(i, random.choice(strategies), center))
+    threads.append(RandomEventSystem(center, num_events=2))
+
+    print("=" * 50)
+    print("   MADRID METRO STATION SIMULATION")
+    print("=" * 50)
+
+    for t in threads:
+        t.start()
+        time.sleep(0.05)
+
+    for t in threads:
+        if isinstance(t, Train):
+            t.join()
+
+    time.sleep(4)
+    print("\n" + "=" * 50)
+    print("   SIMULATION COMPLETE")
+    print("=" * 50)
