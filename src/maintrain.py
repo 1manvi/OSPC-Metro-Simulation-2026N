@@ -447,3 +447,134 @@ if __name__ == "__main__":
     print(pd.read_sql_query("SELECT * FROM events LIMIT 10;", conn))
 
     conn.close()
+
+
+def plot_delays_per_run(db_file="metro_simulation.db"):
+    conn = sqlite3.connect(db_file)
+
+    df = pd.read_sql_query("""
+        SELECT s.id AS simulation_id,
+               COUNT(e.id) AS delays
+        FROM simulations s
+        LEFT JOIN events e
+          ON s.id = e.simulation_id
+          AND e.event = 'DELAYED'
+        GROUP BY s.id
+        ORDER BY s.id;
+    """, conn)
+
+    plt.figure(figsize=(10, 5))
+    plt.bar(df["simulation_id"], df["delays"])
+    plt.title("Train Delays per Simulation Run")
+    plt.xlabel("Simulation ID")
+    plt.ylabel("Number of Delays")
+    plt.tight_layout()
+    plt.savefig("delays_per_run.png")
+    plt.show()
+
+    conn.close()
+
+
+def plot_passenger_throughput(db_file="metro_simulation.db"):
+    conn = sqlite3.connect(db_file)
+
+    df = pd.read_sql_query("""
+        SELECT simulation_id, COUNT(*) AS boarded
+        FROM events
+        WHERE category = 'PASSENGER' AND event = 'BOARDED'
+        GROUP BY simulation_id
+        ORDER BY simulation_id;
+    """, conn)
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(df["simulation_id"], df["boarded"], marker='o')
+    plt.title("Passenger Throughput per Simulation")
+    plt.xlabel("Simulation ID")
+    plt.ylabel("Passengers Boarded")
+    plt.tight_layout()
+    plt.savefig("passenger_throughput.png")
+    plt.show()
+
+    conn.close()
+
+
+
+def plot_delay_distribution(db_file="metro_simulation.db"):
+    conn = sqlite3.connect(db_file)
+
+    df = pd.read_sql_query("""
+        SELECT value AS delay_minutes
+        FROM events
+        WHERE event = 'DELAYED'
+    """, conn)
+
+    df["delay_minutes"] = pd.to_numeric(df["delay_minutes"], errors="coerce")
+
+    plt.figure(figsize=(10, 5))
+    plt.hist(df["delay_minutes"].dropna(), bins=10)
+    plt.title("Distribution of Train Delay Minutes")
+    plt.xlabel("Delay (minutes)")
+    plt.ylabel("Frequency")
+    plt.tight_layout()
+    plt.savefig("delay_distribution.png")
+    plt.show()
+
+    conn.close()
+
+
+def plot_risk_factors(db_file="metro_simulation.db"):
+    conn = sqlite3.connect(db_file)
+
+    df = pd.read_sql_query("""
+        SELECT s.id AS simulation_id,
+               SUM(CASE WHEN e.category = 'EMERGENCY' THEN 1 ELSE 0 END) AS emergencies,
+               SUM(CASE WHEN e.category = 'MACHINE' AND e.event = 'FAILURE' THEN 1 ELSE 0 END) AS failures
+        FROM simulations s
+        LEFT JOIN events e ON s.id = e.simulation_id
+        GROUP BY s.id
+        ORDER BY s.id;
+    """, conn)
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(df["simulation_id"], df["emergencies"], label="Emergencies")
+    plt.plot(df["simulation_id"], df["failures"], label="Machine Failures")
+    plt.title("System Risk Factors per Run")
+    plt.xlabel("Simulation ID")
+    plt.ylabel("Count")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("risk_analysis.png")
+    plt.show()
+
+    conn.close()
+
+
+def plot_throughput_vs_delays(db_file="metro_simulation.db"):
+    conn = sqlite3.connect(db_file)
+
+    df = pd.read_sql_query("""
+        SELECT s.id AS simulation_id,
+               SUM(CASE WHEN e.category='PASSENGER' AND e.event='BOARDED' THEN 1 ELSE 0 END) AS boarded,
+               SUM(CASE WHEN e.event='DELAYED' THEN 1 ELSE 0 END) AS delays
+        FROM simulations s
+        LEFT JOIN events e ON s.id = e.simulation_id
+        GROUP BY s.id;
+    """, conn)
+
+    plt.figure(figsize=(10, 5))
+    plt.scatter(df["boarded"], df["delays"])
+    plt.title("Passenger Throughput vs Train Delays")
+    plt.xlabel("Passengers Boarded")
+    plt.ylabel("Delays")
+    plt.tight_layout()
+    plt.savefig("throughput_vs_delays.png")
+    plt.show()
+
+    conn.close()
+
+
+plot_delays_per_run()
+plot_delay_distribution()
+plot_passenger_throughput()
+plot_risk_factors()
+plot_throughput_vs_delays()
