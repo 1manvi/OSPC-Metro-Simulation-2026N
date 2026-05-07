@@ -432,3 +432,18 @@ if __name__ == "__main__":
     print("\n" + "=" * 50)
     print("   ALL SIMULATIONS COMPLETE")
     print("=" * 50)
+
+    generate_report_visuals("metro_simulation.db")
+
+    conn = sqlite3.connect("metro_simulation.db")
+
+    print("\n--- TABLES ---")
+    print(pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table';", conn))
+
+    print("\n--- SIMULATIONS ---")
+    print(pd.read_sql_query("SELECT * FROM simulations LIMIT 5;", conn))
+
+    print("\n--- EVENTS ---")
+    print(pd.read_sql_query("SELECT * FROM events LIMIT 10;", conn))
+
+    conn.close()
