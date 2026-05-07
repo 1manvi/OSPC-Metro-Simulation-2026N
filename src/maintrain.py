@@ -175,7 +175,7 @@ class TicketMachine(threading.Thread):
         self.machine_id = machine_id
         self.event_center = event_center
         self.cycles = cycles
-        self.logger = Logger
+        self.logger = logger
 
     def run(self):
         for i in range(self.cycles):
