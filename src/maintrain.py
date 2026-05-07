@@ -1,29 +1,127 @@
 import threading
 import random
 import time
-import csv
 import os
 from datetime import datetime
+import sqlite3
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
 
 ###########
-#CSV logger
-class SimulationLogger:
-    def __init__(self, filepath="simulation_log.csv"):
-        self.filepath = filepath
+#changes from the csv logger to sql
+class SimulationDBLogger:
+    def __init__(self, db_path="metro_simulation.db"):
+        self.db_path = db_path
         self._lock = threading.Lock()
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.conn.execute("PRAGMA journal_mode=WAL;")
+        self.conn.execute("PRAGMA foreign_keys = ON;")
+        self._create_tables()
 
-        #file and write header
-        with open(self.filepath, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["timestamp", "category", "event", "detail"])
+    def _create_tables(self):
+        with self.conn:
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS simulations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seed INTEGER NOT NULL,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    status TEXT,
+                    notes TEXT
+                )
+            """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    simulation_id INTEGER NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    event TEXT NOT NULL,
+                    detail TEXT,
+                    entity_id TEXT,
+                    location TEXT,
+                    value REAL,
+                    FOREIGN KEY(simulation_id) REFERENCES simulations(id)
+                )
+            """)
 
-    def log(self, category, event, detail=""):
-        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        with self._lock:
-            with open(self.filepath, "a", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow([ts, category, event, detail])
+    def start_simulation(self, seed, notes=""):
+        started_at = datetime.now().isoformat(timespec="seconds")
+        with self._lock, self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO simulations (seed, started_at, status, notes) VALUES (?, ?, ?, ?)",
+                (seed, started_at, "running", notes)
+            )
+            return cur.lastrowid
+
+    def finish_simulation(self, simulation_id, status="completed"):
+        ended_at = datetime.now().isoformat(timespec="seconds")
+        with self._lock, self.conn:
+            self.conn.execute(
+                "UPDATE simulations SET ended_at = ?, status = ? WHERE id = ?",
+                (ended_at, status, simulation_id)
+            )
+
+    def log(self, simulation_id, category, event, detail="", entity_id=None, location=None, value=None):
+        ts = datetime.now().isoformat(timespec="milliseconds")
+        with self._lock, self.conn:
+            self.conn.execute("""
+                INSERT INTO events
+                (simulation_id, timestamp, category, event, detail, entity_id, location, value)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (simulation_id, ts, category, event, detail, entity_id, location, value))
+
+    def close(self):
+        self.conn.close()
+
+
+def generate_report_visuals(db_file="metro_simulation.db"):
+    if not os.path.exists(db_file):
+        print(f"Error: {db_file} not found.")
+        return
+
+    try:
+        conn = sqlite3.connect(db_file)
+
+        # Example 1: event category distribution
+        df = pd.read_sql_query("""
+            SELECT category, COUNT(*) AS count
+            FROM events
+            GROUP BY category
+        """, conn)
+
+        plt.figure(figsize=(10, 5))
+        plt.pie(df["count"], labels=df["category"], autopct="%1.1f%%", startangle=140)
+        plt.title("Madrid Metro: Event Category Distribution")
+        plt.tight_layout()
+        plt.savefig("event_distribution.png")
+
+        # Example 2: train event distribution
+        train_df = pd.read_sql_query("""
+            SELECT event, COUNT(*) AS count
+            FROM events
+            WHERE category = 'TRAIN'
+            GROUP BY event
+            ORDER BY count DESC
+        """, conn)
+
+        plt.figure(figsize=(10, 5))
+        plt.bar(train_df["event"], train_df["count"])
+        plt.title("Train Operational Metrics")
+        plt.xlabel("Event")
+        plt.ylabel("Count")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig("train_metrics.png")
+
+        conn.close()
+        print("\nVisual reports: 'event_distribution.png' and 'train_metrics.png'")
+
+    except Exception as e:(
+            print(f"Visualization Error: {e}"))
+
 
 class StationEventCenter:
     def __init__(self):
@@ -87,14 +185,28 @@ class EmergencyEvacuation:
 class ArrivingState:
     def handle(self, train):
         print(f"Train {train.train_id} ARRIVING at {train.station.name}")
-        train.logger.log("TRAIN", "ARRIVING", train.train_id)
+        train.logger.log(
+            train.simulation_id,
+            "TRAIN",
+            "ARRIVING",
+            detail=train.train_id,
+            entity_id=train.train_id,
+            location=train.station.name
+        )
         time.sleep(0.5)
         train.state = BoardingState()
 
 class BoardingState:
     def handle(self, train):
         print(f"Train {train.train_id} BOARDING passengers...")
-        train.logger.log("TRAIN", "BOARDING", train.train_id)
+        train.logger.log(
+            train.simulation_id,
+            "TRAIN",
+            "BOARDING",
+            detail=train.train_id,
+            entity_id=train.train_id,
+            location=train.station.name
+        )
         time.sleep(random.uniform(1.0, 2.0))
         if random.random() < 0.25:
             train.state = DelayedState()
@@ -105,7 +217,15 @@ class DelayedState:
     def handle(self, train):
         minutes = random.randint(3, 10)
         print(f"Train {train.train_id} DELAYED by {minutes} minutes!")
-        train.logger.log("TRAIN", "DELAYED", f"{train.train_id} — {minutes} min")
+        train.logger.log(
+            train.simulation_id,
+            "TRAIN",
+            "DELAYED",
+            detail=f"{train.train_id} — {minutes} min",
+            entity_id=train.train_id,
+            location=train.station.name,
+            value=minutes
+        )
         train.event_center.notify("TRAIN_DELAY", {"id": train.train_id, "minutes": minutes})
         time.sleep(1.5)
         train.state = DepartingState()
@@ -113,7 +233,14 @@ class DelayedState:
 class DepartingState:
     def handle(self, train):
         print(f"Train {train.train_id} DEPARTING from {train.station.name}")
-        train.logger.log("TRAIN", "DEPARTED", train.train_id)
+        train.logger.log(
+            train.simulation_id,
+            "TRAIN",
+            "DEPARTED",
+            detail=train.train_id,
+            entity_id=train.train_id,
+            location=train.station.name
+        )
         train.event_center.notify("TRAIN_DEPARTURE", {"id": train.train_id})
 
 
@@ -129,12 +256,13 @@ class MetroStation:
 #train threads
 
 class Train(threading.Thread):
-    def __init__(self, train_id, event_center, station, logger):
-        super().__init__(daemon=True)
+    def __init__(self, train_id, event_center, station, logger, simulation_id):
+        super().__init__()
         self.train_id = train_id
         self.event_center = event_center
         self.station = station
         self.logger = logger
+        self.simulation_id = simulation_id
         self.state = ArrivingState()
 
     def run(self):
@@ -149,63 +277,88 @@ class Train(threading.Thread):
 class Passenger(threading.Thread):
     _ticket_lock = threading.Lock()
 
-    def __init__(self, passenger_id, strategy, event_center, logger):
-        super().__init__(daemon=True)
+    def __init__(self, passenger_id, strategy, event_center, logger, simulation_id):
+        super().__init__()
         self.passenger_id = passenger_id
         self.strategy = strategy
         self.event_center = event_center
         self.logger = logger
+        self.simulation_id = simulation_id
 
     def run(self):
         name = f"Passenger-{self.passenger_id}"
         with Passenger._ticket_lock:
             print(f"{name} buying ticket [{self.strategy.label}]...")
-            self.logger.log("PASSENGER", "TICKET_BOUGHT", f"{name} [{self.strategy.label}]")
-            time.sleep(random.uniform(0.3, 0.6))
+            self.logger.log(
+                self.simulation_id,
+                "PASSENGER",
+                "TICKET_BOUGHT",
+                detail=f"{name} [{self.strategy.label}]",
+                entity_id=name
+            )
+        time.sleep(random.uniform(0.3, 0.6))
         self.strategy.move()
         platform = random.randint(1, 4)
         print(f"{name} reached Platform {platform} and boarded the train")
-        self.logger.log("PASSENGER", "BOARDED", f"{name} — Platform {platform}")
+        self.logger.log(
+            self.simulation_id,
+            "PASSENGER",
+            "BOARDED",
+            detail=f"{name} — Platform {platform}",
+            entity_id=name,
+            location=f"Platform {platform}"
+        )
 ########
 #ticket machine thread
 
 class TicketMachine(threading.Thread):
-    def __init__(self, machine_id, event_center, logger,cycles=3):
-        super().__init__(daemon=True)
+    def __init__(self, machine_id, event_center, logger, simulation_id, cycles=3):
+        super().__init__()
         self.machine_id = machine_id
         self.event_center = event_center
         self.cycles = cycles
         self.logger = logger
+        self.simulation_id = simulation_id
 
     def run(self):
         for i in range(self.cycles):
             time.sleep(random.uniform(0.5, 1.0))
             if random.random() < 0.15:
                 print(f"Ticket Machine {self.machine_id} OUT OF SERVICE!")
-                self.logger.log("MACHINE", "FAILURE", f"Machine {self.machine_id}")
+                self.logger.log(
+                    self.simulation_id,
+                    "MACHINE",
+                    "FAILURE",
+                    detail=f"Machine {self.machine_id}",
+                    entity_id=f"Machine {self.machine_id}"
+                )
                 self.event_center.notify("EMERGENCY", {
                     "location": f"Ticket Machine {self.machine_id}"
                 })
                 time.sleep(1.5)
             else:
                 print(f"Ticket Machine {self.machine_id} dispensed a card (cycle {i+1})")
-                self.logger.log("MACHINE", "CARD_DISPENSED", f"Machine {self.machine_id} cycle {i + 1}")
+                self.logger.log(
+                    self.simulation_id,
+                    "MACHINE",
+                    "CARD_DISPENSED",
+                    detail=f"Machine {self.machine_id} cycle {i + 1}",
+                    entity_id=f"Machine {self.machine_id}"
+                )
 
 ############
 #random event threads
-
-
 class RandomEventSystem(threading.Thread):
     EVENTS = [
         {"type": "EMERGENCY", "location": "Entrance B — suspicious package"},
         {"type": "EMERGENCY", "location": "Platform 2 — medical emergency"},
         {"type": "EMERGENCY", "location": "South entrance — flooding"},
     ]
-
-    def __init__(self, event_center, logger, num_events=2):
-        super().__init__(daemon=True)
+    def __init__(self, event_center, logger, simulation_id, num_events=2):
+        super().__init__()
         self.event_center = event_center
         self.logger = logger
+        self.simulation_id = simulation_id
         self.num_events = num_events
 
     def run(self):
@@ -213,19 +366,27 @@ class RandomEventSystem(threading.Thread):
         for event in chosen:
             time.sleep(random.uniform(3.0, 6.0))
             print(f"\nRANDOM EVENT at {event['location']}")
-            self.logger.log("EMERGENCY", "RANDOM_EVENT", event["location"])
+            self.logger.log(
+                self.simulation_id,
+                "EMERGENCY",
+                "RANDOM_EVENT",
+                detail=event["location"],
+                location=event["location"]
+            )
             self.event_center.notify(event["type"], {"location": event["location"]})
             print()
 
 #############
 # MAIN
 
+def run_simulation(run_number, logger):
+    seed = 1000 + run_number
+    random.seed(seed)
+    np.random.seed(seed)
 
-if __name__ == "__main__":
-    logger = SimulationLogger("simulation-log.csv")
+    simulation_id = logger.start_simulation(seed, notes=f"Run {run_number}")
 
     center = StationEventCenter()
-
     center.subscribe(AnnouncementSystem())
     center.subscribe(SecurityOffice())
     center.subscribe(OperatorPanel())
@@ -234,28 +395,40 @@ if __name__ == "__main__":
     strategies = [NormalMovement(), RushHourMovement(), EmergencyEvacuation()]
 
     threads = []
-    threads.append(Train("Line-10-A", center, sol_station, logger))
-    threads.append(Train("Line-10-B", center, sol_station, logger))
-    threads.append(TicketMachine(1, center, logger))
-    threads.append(TicketMachine(2, center, logger))
-    for i in range(1, 7):
-        threads.append(Passenger(i, random.choice(strategies), center, logger))
-    threads.append(RandomEventSystem(center, logger, num_events=2))
+    threads.append(Train("Line-10-A", center, sol_station, logger, simulation_id))
+    threads.append(Train("Line-10-B", center, sol_station, logger, simulation_id))
+    threads.append(TicketMachine(1, center, logger, simulation_id))
+    threads.append(TicketMachine(2, center, logger, simulation_id))
 
-    print("=" * 50)
-    print("   MADRID METRO STATION SIMULATION")
-    print("=" * 50)
+    for i in range(1, 7):
+        threads.append(Passenger(i, random.choice(strategies), center, logger, simulation_id))
+
+    threads.append(RandomEventSystem(center, logger, simulation_id, num_events=2))
 
     for t in threads:
         t.start()
         time.sleep(0.05)
 
     for t in threads:
-        if isinstance(t, Train):
-            t.join()
+        t.join()
 
-    time.sleep(4)
+    logger.finish_simulation(simulation_id)
+
+
+if __name__ == "__main__":
+    logger = SimulationDBLogger("metro_simulation.db")
+
+    NUM_RUNS = 20
+    for run in range(1, NUM_RUNS + 1):
+        print(f"\n--- Starting simulation run {run}/{NUM_RUNS} ---")
+        run_simulation(run, logger)
+
+    logger.close()
+
+    print("\nProcessing simulation data for visualization...")
+    time.sleep(1)
+    generate_report_visuals("metro_simulation.db")
+
     print("\n" + "=" * 50)
-    print("   SIMULATION COMPLETE")
-    print(f"   Results saved to: simulation_log.csv")
+    print("   ALL SIMULATIONS COMPLETE")
     print("=" * 50)
