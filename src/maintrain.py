@@ -202,7 +202,7 @@ class RandomEventSystem(threading.Thread):
         {"type": "EMERGENCY", "location": "South entrance — flooding"},
     ]
 
-    def __init__(self, event_center, num_events=2):
+    def __init__(self, event_center, logger, num_events=2):
         super().__init__(daemon=True)
         self.event_center = event_center
         self.logger = logger
