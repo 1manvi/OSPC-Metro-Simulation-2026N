@@ -433,8 +433,6 @@ if __name__ == "__main__":
     print("   ALL SIMULATIONS COMPLETE")
     print("=" * 50)
 
-    generate_report_visuals("metro_simulation.db")
-
     conn = sqlite3.connect("metro_simulation.db")
 
     print("\n--- TABLES ---")
