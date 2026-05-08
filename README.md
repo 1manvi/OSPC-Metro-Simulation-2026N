@@ -30,7 +30,7 @@ _throughput_vs_delays.png_ - Scatter plot analyzing the impact of delays on capa
 pip install pandas numpy matplotlib
 
 ### Execute Simulation:
-python main.py
+maintrain.py
 
 ### Simulation Parameters
 **Runs**: 20 independent simulations.
